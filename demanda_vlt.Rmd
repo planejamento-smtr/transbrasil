@@ -1,0 +1,96 @@
+library(readODS)
+library(janitor)
+library(ggplot2)
+library(data.table)
+library(openxlsx)
+library(readxl)
+library(lubridate)
+library(DataCombine)
+library(dplyr)
+library(Hmisc)
+
+
+#abrir estacoes de VLT
+vlt_stations <- st_read('C:/Users/berna/Desktop/PCRJ/TransBrasil/dados/linhas_estacoes/vlt_estacoes.geojson') %>%
+  filter(City == 'Rio de Janeiro')
+head(vlt_stations)
+sort(unique(vlt_stations$Station))
+
+
+#abrir demanda marco, dia util, pre-pandemia
+vlt_data <- read_excel('C:/Users/berna/Desktop/PCRJ/TransBrasil/dados/Data_export_202003.xlsx', trim_ws = TRUE,
+                       sheet = 5) %>%
+  mutate(HORA = as.character(gsub(".* ","", HORA)),
+         Hora = substr(`HORA`, 0, 2), 
+         Dia = substr(DATA, 9, 10)) %>%
+  filter(Dia %in% c('02', '03', '04', '05', '06',
+                    '09', '10', '11', '12', '13'))
+vlt_data[is.na(vlt_data)] <- 0
+str(vlt_data)
+
+#demanda por dia
+vlt_data_dia <- setDT(vlt_data)[, .(Embarques = sum(EMBARQUES)), by = Dia]
+
+ggplot(vlt_data_dia)+
+  geom_bar(aes(x = Embarques, y = Dia), stat="identity")
+
+
+#gerar arquivo demanda por hora de todas as estacoes
+vlt_data_dt <- setDT(vlt_data)[, keyby =.(`DATA`, Hora), .(Embarques = sum(EMBARQUES))] %>%
+  select(Hora, DATA, Embarques) %>% mutate(Data = as.character(DATA)) %>%
+  mutate(Dia = substr(DATA, 9, 10))
+
+str(vlt_data_dt)
+
+#graph comportamento demanda por hora
+ggplot(vlt_data_dt)+
+  geom_line(aes(x = Hora, y = Embarques, group = DATA, color = as.factor(DATA)))+
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 0.5),
+        legend.position = 'bottom',
+        legend.title = element_blank())+
+  ggtitle("Demanda no VLT por hora Nas duas semanas pré-pandemia")
+     
+   
+#filtrar estacoes proximas da TransBrasil
+vlt_transbrasil <- vlt_data %>% 
+  filter(ESTAÇÃO %in% c("CANDELÁRIA", "CENTRAL", "CRISTIANO OTTONI", "RODOVIÁRIA", "SAARA")) %>%
+  filter(Dia == '05')
+
+#soma demanda por hora por estacao proxima da TransBrasil
+vlt_transbrasil <- setDT(vlt_transbrasil)[, keyby =.(ESTAÇÃO, Hora), .(Embarques = sum(EMBARQUES))] 
+
+#demanda por hora por estacao
+ggplot(vlt_transbrasil)+
+  geom_line(aes(x = Hora, y = Embarques, group = ESTAÇÃO, color = ESTAÇÃO))+
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 0.5),
+        legend.position = 'bottom',
+        legend.title = element_blank())+
+  ggtitle("Demanda no VLT nas estações próximas ao BRT TransBrasil no dia 04/03/2020")
+
+
+
+#demanda 0503
+vlt_data_0503 <- vlt_data %>%
+  mutate(Stations = tolower(ESTAÇÃO), hora = substr(HORA, 0, 2)) %>% 
+  filter(Dia == '05' & hora %in% c('07', '08', '09', '10'))
+vlt_data[is.na(vlt_data_0403)] <- 0
+
+
+#soma de embarque por estacao
+vlt_data_0503_dt <- setDT(vlt_data_0503)[, .(Embarques = sum(EMBARQUES)), by = Stations]
+
+
+#juntar estacoes com dados de embarque
+vlt_stations <- vlt_stations %>% mutate(Stations = tolower(Station))
+
+vlt_stations <- left_join(vlt_stations, vlt_data_0503_dt) %>%
+  mutate(lat = unlist(map(vlt_stations$geometry,1)),
+         lon = unlist(map(vlt_stations$geometry,2)))
+
+#mapa
+ggplot()+
+  geom_point(data = vlt_stations, aes(x = lat, y = lon, size = Embarques, colour = Embarques))+
+  viridis::scale_colour_viridis()+
+  guides(color=guide_legend(), size = guide_legend())
